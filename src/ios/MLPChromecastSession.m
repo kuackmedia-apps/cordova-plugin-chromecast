@@ -250,37 +250,95 @@ NSMutableArray<MLPCastRequestDelegate*>* requestDelegates;
 }
 
 - (void)createMessageChannelWithCommand:(CDVInvokedUrlCommand*)command namespace:(NSString*)namespace{
+    // Verificar si ya existe un canal para este namespace
+    if (self.genericChannels[namespace] != nil) {
+        NSLog(@"Channel for namespace %@ already exists", namespace);
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        return;
+    }
+    
+    // Verificar si hay una sesión activa
+    if (currentSession == nil) {
+        NSLog(@"Cannot create channel: No active Cast session");
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR 
+                                         messageAsString:@"No active Cast session"];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        return;
+    }
+    
+    // Crear nuevo canal
     GCKGenericChannel* newChannel = [[GCKGenericChannel alloc] initWithNamespace:namespace];
     newChannel.delegate = self;
+    
+    // Inicializar diccionario si es nil
+    if (self.genericChannels == nil) {
+        self.genericChannels = [NSMutableDictionary dictionary];
+    }
+    
+    // Almacenar el canal
     self.genericChannels[namespace] = newChannel;
+    
+    // Añadir el canal a la sesión
     [currentSession addChannel:newChannel];
+    NSLog(@"Added channel for namespace: %@", namespace);
+    
+    // Devolver resultado exitoso
     CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
     [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
 }
 
 - (void)sendMessageWithCommand:(CDVInvokedUrlCommand*)command namespace:(NSString*)namespace message:(NSString*)message{
+    // Verificar si la sesión existe
+    if (currentSession == nil || currentSession.connectionState != GCKConnectionStateConnected) {
+        NSString* errorMsg = @"Cannot send message: No active Cast session or session not connected";
+        NSLog(@"%@", errorMsg);
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR 
+                                        messageAsString:errorMsg];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        return;
+    }
+    
+    // Inicializar diccionario si es nil
+    if (self.genericChannels == nil) {
+        self.genericChannels = [NSMutableDictionary dictionary];
+    }
+    
     // Verificar si el canal ya existe antes de crear uno nuevo
     GCKGenericChannel* channel = self.genericChannels[namespace];
     
-    // Si el canal no existe, crearlo
+    // Si el canal no existe, crearlo primero y esperar antes de enviar
     if (channel == nil) {
         NSLog(@"Channel for namespace %@ not found, creating new channel", namespace);
         channel = [[GCKGenericChannel alloc] initWithNamespace:namespace];
         channel.delegate = self;
         self.genericChannels[namespace] = channel;
         
-        // Verificar si la sesión existe
-        if (currentSession == nil) {
-            NSLog(@"Cannot send message: No active Cast session");
-            CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR 
-                                             messageAsString:@"No active Cast session"];
-            [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
-            return;
-        }
-        
         // Añadir el canal a la sesión
         [currentSession addChannel:channel];
         NSLog(@"Added channel for namespace: %@", namespace);
+        
+        // Pequeña pausa para permitir que el canal se conecte
+        // Enviamos el mensaje después de un pequeño retraso
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self sendMessageToChannel:channel withNamespace:namespace message:message command:command];
+        });
+    } else {
+        // El canal ya existe, enviamos el mensaje inmediatamente
+        [self sendMessageToChannel:channel withNamespace:namespace message:message command:command];
+    }
+}
+
+// Método auxiliar para enviar el mensaje y manejar errores
+- (void)sendMessageToChannel:(GCKGenericChannel*)channel withNamespace:(NSString*)namespace message:(NSString*)message command:(CDVInvokedUrlCommand*)command {
+    // Verificar que el canal está conectado y registrado
+    if (currentSession == nil || currentSession.connectionState != GCKConnectionStateConnected) {
+        NSString* errorMsg = @"Cannot send message: Session disconnected";
+        NSLog(@"%@", errorMsg);
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR 
+                                        messageAsString:errorMsg];
+        [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
+        return;
     }
     
     // Ahora enviar el mensaje usando el canal
@@ -293,7 +351,7 @@ NSMutableArray<MLPCastRequestDelegate*>* requestDelegates;
     if (error != nil) {
         NSLog(@"Error sending message: %@", error.description);
         pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR 
-                                       messageAsString:error.description];
+                                      messageAsString:error.description];
     } else {
         NSLog(@"Message sent successfully to namespace: %@", namespace);
         pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK];
