@@ -54,10 +54,10 @@
 
     <podspec>
       <config>
-        <source url="https://github.com/CocoaPods/Specs/blob/master/Specs/8/1/2/google-cast-sdk/4.8.3/google-cast-sdk.podspec.json"/>
+        <source url="https://cdn.cocoapods.org/"/>
       </config>
       <pods use-frameworks="true">
-        <pod name="google-cast-sdk" spec="~> 4.8.3" />
+        <pod name="google-cast-sdk-xcframework" spec="~> 4.8.3" />
       </pods>
     </podspec>
 
