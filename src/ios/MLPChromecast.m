@@ -20,12 +20,19 @@ int scansRunning = 0;
     [super pluginInitialize];
     self.currentSession = [MLPChromecastSession alloc];
 
-    NSString* applicationId = [NSUserDefaults.standardUserDefaults stringForKey:@"appId"];
-    if (applicationId == nil) {
-        applicationId = kGCKDefaultMediaReceiverApplicationID;
+    // Lee explícitamente la preferencia desde config.xml
+    NSString *applicationId = [self.commandDelegate.settings objectForKey:@"chromecastappid"];
+
+    if (applicationId != nil && applicationId.length > 0 && ![applicationId isEqualToString:kGCKDefaultMediaReceiverApplicationID]) {
+        [self setAppId:applicationId];
+
+        NSLog(@"✅ Chromecast inicializado automáticamente con ID personalizado: %@", applicationId);
+    } else {
+        // Maneja claramente el caso si la preferencia no está correctamente definida
+        NSLog(@"⚠️ chromecastappid no definido correctamente en config.xml. Chromecast NO inicializado automáticamente.");
     }
-    [self setAppId:applicationId];
 }
+
 
 - (void)setAppId:(NSString*)applicationId {
     // If the applicationId is invalid or has not changed, don't do anything
@@ -95,7 +102,7 @@ int scansRunning = 0;
     [self findAvailableReceiver:^{
         // Start device discovery to ensure device is available
         [[GCKCastContext sharedInstance].discoveryManager startDiscovery];
-        
+
         // Add a brief delay before attempting to rejoin to allow discovery to find devices
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             NSLog(@"Attempting to rejoin existing session");
@@ -107,29 +114,29 @@ int scansRunning = 0;
 - (void)findAvailableReceiver:(void(^)(void))successCallback {
     // Ensure the scan is running
     [self startRouteScan];
-    
+
     // Log the start of device discovery
     NSLog(@"Starting device discovery for available receivers");
-    
+
     // Increased retry count to 8 (using new exponential backoff in retry method)
     // This gives more time for device discovery with gradually increasing intervals
     [MLPCastUtilities retry:^BOOL{
         // Did we find any devices?
         BOOL hasDevices = [GCKCastContext.sharedInstance.discoveryManager hasDiscoveredDevices];
-        
+
         if (hasDevices) {
             // Get device count for logging
             NSUInteger deviceCount = [GCKCastContext.sharedInstance.discoveryManager deviceCount];
             NSLog(@"Found %lu Chromecast device(s)", (unsigned long)deviceCount);
-            
+
             // See if any of these devices matches our saved session
             GCKSessionManager *sessionManager = [GCKCastContext sharedInstance].sessionManager;
             GCKSession *currentSession = sessionManager.currentSession;
-            
+
             if (currentSession != nil) {
                 NSString *deviceId = currentSession.device.deviceID;
                 BOOL foundSessionDevice = NO;
-                
+
                 // Check if the device from our saved session is among the discovered devices
                 for (NSUInteger i = 0; i < deviceCount; i++) {
                     GCKDevice *device = [[GCKCastContext sharedInstance].discoveryManager deviceAtIndex:i];
@@ -139,16 +146,16 @@ int scansRunning = 0;
                         break;
                     }
                 }
-                
+
                 if (!foundSessionDevice) {
                     NSLog(@"Warning: Current session device not found in discovery results");
                 }
             }
-            
+
             [self sendReceiverAvailable:YES];
             return YES;
         }
-        
+
         NSLog(@"No Chromecast devices found yet, continuing discovery...");
         return NO;
     } forTries:8 callback:^(BOOL passed){
@@ -273,53 +280,53 @@ int scansRunning = 0;
 - (void)queueInsertItems:(CDVInvokedUrlCommand *)command {
     // Check if we have a valid session
     if (self.currentSession == nil || self.currentSession.remoteMediaClient == nil) {
-        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR 
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR
                                              messageAsString:@"No active session or media client"];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
         return;
     }
-    
+
     // Validate input arguments
     if (command.arguments.count == 0 || ![command.arguments[0] isKindOfClass:[NSDictionary class]]) {
-        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR 
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR
                                              messageAsString:@"Invalid arguments - expected object with items and insertBeforeItemId"];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
         return;
     }
-    
+
     // Extract data from arguments
     NSDictionary *request = command.arguments[0];
-    
+
     // Validate required properties
     if (![request objectForKey:@"items"] || ![request[@"items"] isKindOfClass:[NSArray class]]) {
-        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR 
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR
                                              messageAsString:@"Missing required property: items"];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
         return;
     }
-    
+
     if (![request objectForKey:@"insertBeforeItemId"]) {
-        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR 
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR
                                              messageAsString:@"Missing required property: insertBeforeItemId"];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
         return;
     }
-    
+
     NSArray *items = request[@"items"];
     NSInteger insertBeforeItemId = [request[@"insertBeforeItemId"] integerValue];
-    
+
     // Additional validation
     if (items.count == 0) {
-        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR 
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR
                                              messageAsString:@"Empty items array"];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
         return;
     }
-    
+
     // Log for debugging
-    NSLog(@"queueInsertItems: Received %lu items to insert before itemId %ld", 
+    NSLog(@"queueInsertItems: Received %lu items to insert before itemId %ld",
            (unsigned long)items.count, (long)insertBeforeItemId);
-    
+
     // Create queue items array from JSON data
     NSMutableArray *queueItems = [[NSMutableArray alloc] init];
     for (NSDictionary *item in items) {
@@ -331,15 +338,15 @@ int scansRunning = 0;
             NSLog(@"Failed to create queue item from: %@", item);
         }
     }
-    
+
     // Final validation before calling the session method
     if (queueItems.count == 0) {
-        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR 
+        CDVPluginResult* pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_ERROR
                                              messageAsString:@"Failed to create any valid queue items"];
         [self.commandDelegate sendPluginResult:pluginResult callbackId:command.callbackId];
         return;
     }
-    
+
     // Call the session method to insert the items
     [self.currentSession queueInsertItemsWithCommand:command queueItems:queueItems insertBeforeItemId:insertBeforeItemId];
 }
